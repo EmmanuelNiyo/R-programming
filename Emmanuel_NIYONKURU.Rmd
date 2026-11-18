@@ -1,0 +1,453 @@
+---
+#title: "Emmanuel_NIYONKURU"
+#output: html_document
+---
+
+---
+title: "Population Growth & CO2 Emissions"
+author: "Emmanuel NIYONKURU - 20252MBI043"
+date: "11/04/2026"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+# Basic knitting settings: show the code, hide warnings and messages,
+# and use the same figure size for every plot.
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 9,
+  fig.height = 5
+)
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(knitr)
+
+# Load the data.
+# Two files are used: one for population (area, density, growth rate)
+# and one for per-capita CO2 emissions from 1990 to 2019.
+# The relative paths are left in comments in case the folder is moved.
+
+population_raw <- read.csv(
+  "/Users/ndtltd/Documents/Projects/Assigment K P/world_population.csv",
+  # population_raw <- read.csv("datasets/world_population.csv",
+  check.names = FALSE
+)
+
+co2_raw <- read.csv(
+  "/Users/ndtltd/Documents/Projects/Assigment K P/CO2_emission.csv",
+  # co2_raw <- read.csv("datasets/CO2_emission.csv",
+  check.names = FALSE
+)
+
+# Rename the population columns.
+# The original names are long and contain spaces, which makes them awkward
+# to use in code. Short names are easier to type and read.
+
+population <- population_raw |>
+  rename(
+    rank          = Rank,
+    code          = CCA3,
+    country_name  = `Country/Territory`,
+    continent     = Continent,
+    pop_2022      = `2022 Population`,
+    pop_2020      = `2020 Population`,
+    pop_2015      = `2015 Population`,
+    pop_2010      = `2010 Population`,
+    pop_2000      = `2000 Population`,
+    pop_1990      = `1990 Population`,
+    pop_1980      = `1980 Population`,
+    pop_1970      = `1970 Population`,
+    area_km2      = `Area (km²)`,
+    density       = `Density (per km²)`,
+    growth_factor = `Growth Rate`,
+    world_pct     = `World Population Percentage`
+  )
+
+# Clean the CO2 file.
+# The 2019 column appears twice in the source, so only the first copy is
+# kept. This avoids duplicate column names further down.
+
+co2_data <- co2_raw[, !duplicated(names(co2_raw)), drop = FALSE]
+
+# Small lookup table with country codes and their standard names.
+pop_names <- population |> select(code, country_name)
+
+# Rename the CO2 country columns and attach the standard names through
+# the shared ISO3 code.
+co2_data <- co2_data |>
+  rename(country_source = `Country Name`, code = country_code) |>
+  left_join(pop_names, by = "code", suffix = c("_source", "_population")) |>
+  mutate(country_name = coalesce(country_name, country_source))
+
+# Reshape the CO2 data to long format.
+# One row per country and year is easier to plot and summarise.
+
+co2_years <- as.character(1990:2019)
+
+co2_long <- co2_data |>
+  pivot_longer(
+    cols      = all_of(co2_years),
+    names_to  = "year",
+    values_to = "co2_per_capita"
+  ) |>
+  mutate(year = as.integer(year))
+
+# Merge the two tables.
+# Countries are matched by name and only those present in both files are
+# kept. The co2_2019 column stores the most recent emission value.
+
+merged <- population |>
+  inner_join(co2_data, by = "country_name") |>
+  mutate(co2_2019 = .data[["2019"]])
+
+# Look for outliers with the 1.5-IQR rule.
+# Very large but real values (China's population, Monaco's density) stay
+# in the data. A boxplot flag alone is not a reason to remove them.
+
+numeric_population <- names(population)[
+  vapply(population, is.numeric, logical(1))
+]
+
+outlier_summary <- bind_rows(lapply(numeric_population, function(variable) {
+  x       <- population[[variable]]
+  bounds  <- quantile(x, c(0.25, 0.75), na.rm = TRUE, names = FALSE)
+  spread  <- bounds[2] - bounds[1]
+  tibble(
+    variable      = variable,
+    lower_bound   = bounds[1] - 1.5 * spread,
+    upper_bound   = bounds[2] + 1.5 * spread,
+    outlier_count = sum(
+      x < bounds[1] - 1.5 * spread | x > bounds[2] + 1.5 * spread,
+      na.rm = TRUE
+    )
+  )
+}))
+
+# Project the 2030 population.
+# The growth rate is stored as a multiplier (1.01 means about 1% per
+# year), so it is first converted to a decimal rate. The formula used is
+# N(2030) = P(2022) * exp(r * 8). This assumes the rate stays constant,
+# so the result is only an illustration.
+
+population <- population |>
+  mutate(
+    annual_growth_rate = growth_factor - 1,
+    pop_2030           = pop_2022 * exp(annual_growth_rate * (2030 - 2022))
+  )
+
+# The ten most populous countries in 2022 and their historical trend.
+top10 <- population |> arrange(desc(pop_2022)) |> slice_head(n = 10)
+
+top10_trend <- top10 |>
+  select(country_name, pop_1990, pop_2000, pop_2010,
+         pop_2015, pop_2020, pop_2022) |>
+  pivot_longer(
+    cols      = starts_with("pop_"),
+    names_to  = "year",
+    values_to = "population"
+  ) |>
+  mutate(year = as.integer(sub("pop_", "", year)))
+
+# CO2 history for the same ten countries.
+top10_co2 <- co2_long |>
+  filter(country_name %in% top10$country_name)
+
+# Keep only countries with both a 2022 population and a 2019 emission value.
+merged_complete <- merged |>
+  filter(!is.na(co2_2019), !is.na(pop_2022))
+
+# Correlations between some population variables.
+correlation_data <- population |>
+  select(area_km2, density, annual_growth_rate, world_pct)
+
+correlation_matrix <- cor(correlation_data, use = "pairwise.complete.obs")
+
+correlation_long <- as.data.frame(as.table(correlation_matrix)) |>
+  rename(variable_x = Var1, variable_y = Var2, correlation = Freq)
+
+# Sum per-capita CO2 by continent.
+# These are sums of country-level per-capita values, not total emissions.
+# The discussion explains why this matters.
+
+continent_totals <- merged |>
+  filter(!is.na(co2_2019)) |>
+  group_by(continent) |>
+  summarise(
+    sum_country_per_capita = sum(co2_2019),
+    .groups = "drop"
+  ) |>
+  arrange(desc(sum_country_per_capita))
+
+# Pearson correlation and a regression of CO2 on log10 population.
+# Population is very skewed, so the log scale makes the relationship
+# easier to interpret.
+
+population_co2_test <- cor.test(
+  merged_complete$pop_2022,
+  merged_complete$co2_2019,
+  method = "pearson"
+)
+
+population_co2_model <- lm(
+  co2_2019 ~ log10(pop_2022),
+  data = merged_complete
+)
+```
+
+# Introduction
+
+This report looks at how population size and growth relate to carbon dioxide
+(CO2) emissions across countries. It describes the population data, projects
+the 2030 population with the given exponential formula, shows how population
+and emissions have changed over time, and compares population counts with
+per-capita CO2 emissions.
+
+# Data preparation and exploratory analysis
+
+The population file has `r nrow(population)` rows and
+`r ncol(population_raw)` columns. The CO2 file has `r nrow(co2_raw)` rows and
+`r ncol(co2_raw)` columns before the duplicate 2019 column is removed.
+Population values are recorded at a few points in time (every ten years, or
+at selected years), while CO2 emissions are given for every year from 1990
+to 2019. The CO2 measure is **metric tons per capita**, not a country total.
+
+## Variable names and structure
+
+```{r population-variables}
+names(population_raw)
+```
+
+```{r population-structure}
+str(population_raw)
+```
+
+```{r population-shape}
+dim(population_raw)
+```
+
+## First five and last ten observations
+
+```{r population-preview}
+head(population_raw, 5)
+tail(population_raw, 10)
+```
+
+## Duplicate rows and missing values
+
+There are `r sum(duplicated(population_raw))` duplicate rows in the
+population file. They are only removed if they exist. The number of missing
+values in each column is shown below.
+
+```{r missing-population}
+data.frame(
+  variable        = names(population_raw),
+  missing_values  = colSums(is.na(population_raw))
+)
+```
+
+The population file has no missing values, so nothing needs to be filled in
+or deleted. The CO2 file has `r sum(is.na(co2_data[["2019"]]))` missing 2019
+values. Those rows are left out of any analysis that needs 2019 rather than
+being replaced.
+
+## Outlier screening
+
+The table below uses the 1.5-IQR rule for the main numeric variables. The
+boxplots use a log scale for population, area, and density where that makes
+them easier to read. Countries with extreme but real values (very large
+populations or very high densities) are kept. Being flagged by a boxplot does
+not mean the value is wrong.
+
+```{r outlier-counts}
+kable(outlier_summary, digits = 3,
+      caption = "IQR-flagged values in selected population variables")
+```
+
+```{r outlier-boxplots, fig.height=9}
+outlier_long <- population |>
+  select(country_name, pop_2022, area_km2, density, growth_factor, world_pct) |>
+  pivot_longer(-country_name, names_to = "variable", values_to = "value")
+
+ggplot(outlier_long, aes(x = "", y = value)) +
+  geom_boxplot(outlier.alpha = 0.45) +
+  facet_wrap(~ variable, scales = "free_y", ncol = 3) +
+  labs(x = NULL, y = "Value",
+       title = "Distributions and flagged values") +
+  theme_minimal()
+```
+
+# Population projection to 2030
+
+The `Growth Rate` column is a multiplier, so 1.01 means about 1% growth per
+year. The decimal rate is therefore \(r = \text{Growth Rate} - 1\). The
+projection uses `t = 8` years in `N[t] = P * exp(r * t)`, with the 2022
+population as `P`. Keeping the rate constant until 2030 makes this an
+illustration rather than an official forecast.
+
+```{r projection-table}
+top10 |>
+  select(country_name, pop_2022, annual_growth_rate, pop_2030) |>
+  mutate(across(c(pop_2022, pop_2030), round)) |>
+  kable(
+    col.names = c("Country", "2022 population", "Annual rate", "Projected 2030"),
+    caption   = "Projection for the ten most populous countries"
+  )
+```
+
+# Population trends
+
+## Ten most populous countries in 2022
+
+```{r top10-population-2022}
+ggplot(top10, aes(x = reorder(country_name, pop_2022), y = pop_2022)) +
+  geom_col(fill = "#2878B5") +
+  coord_flip() +
+  scale_y_continuous(labels = scales::label_comma()) +
+  labs(x = NULL, y = "Population",
+       title = "Ten most populous countries in 2022") +
+  theme_minimal()
+```
+
+## Available population trend observations, 1990-2022
+
+Population values are available for 1990, 2000, 2010, 2015, 2020, and 2022.
+The lines join these points, so they should not be read as yearly data.
+
+```{r population-trends}
+ggplot(top10_trend, aes(x = year, y = population,
+                        color = country_name, group = country_name)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.8) +
+  scale_y_continuous(labels = scales::label_comma()) +
+  scale_x_continuous(breaks = c(1990, 2000, 2010, 2015, 2020, 2022)) +
+  labs(x = "Year", y = "Population", color = "Country",
+       title = "Population of the 2022 top ten, 1990-2022") +
+  theme_minimal()
+```
+
+# CO2 emissions trend for the top ten
+
+Country codes are used to match records that differ slightly in name (for
+example, different spellings or official names) before the join on standard
+names. The emission values are per capita. Missing country-year values are
+left as missing and skipped in the line plot.
+
+```{r co2-trends}
+ggplot(top10_co2, aes(x = year, y = co2_per_capita,
+                      color = country_name, group = country_name)) +
+  geom_line(linewidth = 0.8, na.rm = TRUE) +
+  labs(x = "Year", y = "CO2 emissions (metric tons per capita)",
+       color = "Country",
+       title = "Per-capita CO2 in the top ten countries, 1990-2019") +
+  theme_minimal()
+```
+
+# Correlation analysis
+
+## Population characteristics
+
+The numbers below show how area, density, annual growth rate, and share of
+world population are related to each other. A correlation does not mean one
+variable causes another.
+
+```{r population-correlations}
+round(correlation_matrix, 3)
+```
+
+```{r population-correlation-heatmap}
+ggplot(correlation_long, aes(variable_x, variable_y, fill = correlation)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sprintf("%.2f", correlation)), size = 4) +
+  scale_fill_gradient2(
+    low = "#2166AC", mid = "white", high = "#B2182B",
+    midpoint = 0, limits = c(-1, 1)
+  ) +
+  coord_equal() +
+  labs(x = NULL, y = NULL, fill = "Correlation",
+       title = "Correlation heatmap for population variables") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 35, hjust = 1))
+```
+
+## 2022 population and 2019 CO2 emissions
+
+There are `r nrow(merged_complete)` countries with both a 2022 population and
+a 2019 emission value. Pearson's correlation is
+`r round(unname(population_co2_test$estimate), 3)`
+(`r format.pval(population_co2_test$p.value, digits = 3)`). Because
+population is heavily skewed, the regression uses log10 population. It
+describes the link with per-capita emissions, not with total emissions.
+
+```{r population-co2-scatter}
+ggplot(merged_complete, aes(x = pop_2022, y = co2_2019)) +
+  geom_point(alpha = 0.65, color = "#2878B5") +
+  geom_smooth(aes(x = pop_2022), method = "lm", se = TRUE,
+              formula = y ~ log10(x), color = "#B2182B") +
+  scale_x_log10(labels = scales::label_comma()) +
+  labs(x = "2022 population (log scale)",
+       y = "2019 CO2 emissions (metric tons per capita)",
+       title = "Population size and per-capita CO2 emissions") +
+  theme_minimal()
+```
+
+```{r population-co2-model}
+summary(population_co2_model)
+```
+
+# Comparison by continent
+
+The continent comparison adds up country-level 2019 per-capita values within
+each continent. This is an unweighted sum of per-capita figures and not a
+continent's total CO2 emissions. To compare totals properly, a
+population-weighted figure or a total-emissions dataset would be needed.
+
+```{r continent-table}
+kable(continent_totals, digits = 2,
+      col.names = c("Continent", "Sum of country per-capita values"),
+      caption   = "2019 per-capita CO2 sums by continent")
+```
+
+```{r continent-plot}
+ggplot(continent_totals,
+       aes(x = reorder(continent, sum_country_per_capita),
+           y = sum_country_per_capita)) +
+  geom_col(fill = "#3A923A") +
+  coord_flip() +
+  labs(x = NULL,
+       y = "Sum of country per-capita values (metric tons per capita)",
+       title = "2019 per-capita CO2 sums by continent") +
+  theme_minimal()
+```
+
+In this sum, the highest continent is
+**`r continent_totals$continent[1]`**
+(`r round(continent_totals$sum_country_per_capita[1], 2)`).
+The third is **`r continent_totals$continent[3]`**
+(`r round(continent_totals$sum_country_per_capita[3], 2)`), and the last is
+**`r continent_totals$continent[nrow(continent_totals)]`**
+(`r round(continent_totals$sum_country_per_capita[nrow(continent_totals)], 2)`).
+These values should be read with the per-capita caveat above in mind.
+
+# Discussion, recommendations, and conclusion
+
+Population grew noticeably in several of the most populous countries, but the
+exponential projection keeps each country's 2022 growth rate fixed. Population
+size on its own does not tell us much about per-capita emissions, and the
+association found here should not be read as causal. The CO2 file also has
+missing values and reports emissions per capita, which limits what can be said
+about total emissions. Future work could use annual population data, describe
+a forecast model together with its uncertainty, and use total-emissions or
+population-weighted per-capita data for fair comparisons across continents.
+
+This analysis covered data inspection, cleaning, visualisation, projection,
+country matching, and correlation and regression. The main point is that the
+meaning and units of a variable matter: adding per-capita values does not give
+a total.

@@ -1,0 +1,76 @@
+## Question 3: Using lapply, sapply, tapply, apply, and mapply
+
+These functions save you from repeating the same instruction by hand. For
+example, instead of calculating the average of each column one at a time, you
+can ask one of these functions to repeat the calculation for you. They differ
+in what they repeat the calculation over and how they organize the results.
+
+For these examples, df is a data frame containing the built-in iris data.
+
+{r question-3-data}
+df <- iris
+
+
+### 1. lapply()
+
+Think of lapply() as a helper that visits each selected column, performs the
+same task, and puts every answer into a list. A list is a container that keeps
+results together. In this example, it calculates the average of each numeric
+measurement column in df.
+
+```{r lapply-example}
+lapply(df[, 1:4], mean)
+```
+
+### 2. sapply()
+
+sapply() does the same kind of repeated work as lapply(), but tries to
+present the answers in a simpler form. Since each result here is one number,
+the answers are displayed together as a named vector instead of a list.
+
+```{r sapply-example}
+sapply(df[, 1:4], mean)
+```
+
+### 3. tapply()
+
+tapply() first sorts values into groups using a category column, then
+performs a calculation separately for each group. Here, it groups flowers by
+species and calculates the average sepal length for each species.
+
+```{r tapply-example}
+tapply(df$Sepal.Length, df$Species, mean)
+```
+
+### 4. apply()
+
+apply() works across the rows or columns of a table of numbers. The 2 in
+this example tells R to calculate one average for each column. Use 1 instead
+to calculate one result for each row. Here, the four measurement columns are
+selected, leaving out the text category column.
+
+```{r apply-example}
+apply(df[, 1:4], 2, mean)
+```
+
+### 5. mapply()
+
+mapply() takes values from several columns in matching positions and uses
+them together. Here, it adds the sepal length and width from row 1, then row 2,
+then row 3. This is useful when one calculation needs more than one input for
+each observation.
+
+```{r mapply-example}
+mapply(
+  function(length, width) length + width,
+  df$Sepal.Length[1:3],
+  df$Sepal.Width[1:3]
+)
+```
+
+In simple terms:
+  - lapply(): repeat a task for each selected column and keep the answers in a list
+- sapply(): repeat a task like lapply(), but simplify how the answers are shown
+- tapply(): split values into groups, then calculate an answer for each group
+- apply(): calculate an answer for each row or each column
+- mapply(): combine matching values from multiple columns in the same calculation

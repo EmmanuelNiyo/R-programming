@@ -1,0 +1,25 @@
+
+
+# 1. Load the dataset
+data(mtcars)
+head(mtcars)
+
+# 2. Explore the data
+cor(mtcars[, c("mpg", "wt", "hp", "disp")])
+pairs(mtcars[, c("mpg", "wt", "hp", "disp")], pch = 19, col = "steelblue")
+
+# 3. Fit the multiple linear regression
+model <- lm(mpg ~ wt + hp + disp, data = mtcars)
+
+# 4. The results
+summary(model)
+confint(model)
+
+# 5. Check the assumptions 
+par(mfrow = c(2, 2))
+plot(model)
+par(mfrow = c(1, 1))
+
+# 6. Predict mpg for a new car
+new_car <- data.frame(wt = 3.0, hp = 120, disp = 200)
+predict(model, newdata = new_car, interval = "prediction")

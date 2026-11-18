@@ -1,0 +1,182 @@
+---
+title: "Population Growth & CO2 Emissions"
+author: "Emmanuel NIYONKURU - 20252MBI043"
+date: "11/04/2026"
+output:
+  pdf_document:
+    latex_engine: pdflatex
+    toc: false
+    number_sections: false
+geometry: margin=0.55in
+fontsize: 10pt
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.width = 6.2, fig.height = 2.3, fig.align = "center")
+library(dplyr)
+library(ggplot2)
+
+pop <- read.csv("/Users/ndtltd/Documents/Projects/Assigment K P/world_population.csv", check.names = FALSE)
+## pop <- read.csv("Documents/Projects/Assignment K P/world_population.csv", check.names = FALSE)
+## "/Users/ndtltd/Documents/Projects/Assigment K P
+co2_raw <- read.csv("/Users/ndtltd/Documents/Projects/Assigment K P/CO2_emission.csv", check.names = FALSE)
+## co2_raw <- read.csv("datasets/CO2_emission.csv", check.names = FALSE)
+co2 <- co2_raw[, !duplicated(names(co2_raw)), drop = FALSE]
+names(co2)[names(co2) == "Country Name"] <- "country_source"
+names(co2)[names(co2) == "country_code"] <- "code"
+pop_names <- data.frame(code = pop$CCA3,
+                        country_name = pop[["Country/Territory"]])
+co2 <- dplyr::left_join(co2, pop_names, by = "code",
+                        suffix = c("_source", "_population"))
+co2$country_name <- dplyr::coalesce(co2$country_name, co2$country_source)
+names(pop)[names(pop) == "Country/Territory"] <- "country_name"
+names(pop)[names(pop) == "CCA3"] <- "code"
+names(pop)[names(pop) == "Continent"] <- "continent"
+names(pop)[names(pop) == "2022 Population"] <- "pop_2022"
+merged <- dplyr::inner_join(pop, co2, by = "country_name")
+names(merged)[names(merged) == "2019"] <- "co2_2019"
+complete <- merged[!is.na(merged$pop_2022) & !is.na(merged$co2_2019), ]
+
+top10 <- pop[order(-pop$pop_2022), ][1:10, ]
+top10$projected_2030 <- top10$pop_2022 *
+  exp((top10[["Growth Rate"]] - 1) * 8)
+missing_pop <- sum(is.na(read.csv("/Users/ndtltd/Documents/Projects/Assigment K P/world_population.csv",
+                                  check.names = FALSE)))
+duplicate_pop <- sum(duplicated(read.csv("/Users/ndtltd/Documents/Projects/Assigment K P/world_population.csv",
+                                         check.names = FALSE)))
+numeric_cols <- c("2022 Population", "Area (km²)", "Density (per km²)",
+                  "Growth Rate", "World Population Percentage")
+outlier_n <- vapply(numeric_cols, function(nm) {
+  x <- read.csv("/Users/ndtltd/Documents/Projects/Assigment K P/world_population.csv", check.names = FALSE)[[nm]]
+  q <- quantile(x, c(.25, .75), na.rm = TRUE, names = FALSE)
+  sum(x < q[1] - 1.5 * diff(q) | x > q[2] + 1.5 * diff(q), na.rm = TRUE)
+}, integer(1))
+
+cor_vars <- data.frame(
+  area = pop[["Area (km²)"]],
+  density = pop[["Density (per km²)"]],
+  growth_rate = pop[["Growth Rate"]] - 1,
+  world_pct = pop[["World Population Percentage"]]
+)
+cor_mat <- cor(cor_vars, use = "pairwise.complete.obs")
+ct <- cor.test(complete$pop_2022, complete$co2_2019)
+model <- lm(co2_2019 ~ log10(pop_2022), data = complete)
+continent_sum <- aggregate(
+  complete$co2_2019,
+  by = list(continent = complete$continent),
+  FUN = sum
+)
+continent_sum <- continent_sum[order(-continent_sum$x), ]
+```
+
+\begin{abstract}This study examines population growth and CO2 emissions using a 234-country
+population dataset and a country-level emissions dataset. The population data
+have no missing values or duplicate rows. Population projections to 2030 use
+the exponential model and the reported growth factor converted to an annual
+rate. The ten largest populations are summarized, and per-capita emissions
+are compared across countries and continents. Across `r nrow(complete)`
+countries with complete 2022 population and 2019 emissions data, Pearson
+correlation is `r sprintf("%.3f", unname(ct$estimate))`
+(`r format.pval(ct$p.value, digits = 2)`). The analysis finds that population
+size alone does not explain per-capita emissions. Continent sums of
+country-level per-capita values are reported as requested but are not totals
+of continent emissions.
+\end{abstract}
+
+\section{Introduction}
+Population change can affect resource demand, while CO2 emissions also depend
+on energy systems, consumption, and technology. This project describes
+population patterns and investigates their relationship with CO2 emissions.
+The interpretation distinguishes per-capita emissions from total emissions.
+
+\section{Methods}
+The population file has `r nrow(pop)` countries/territories and
+`r ncol(read.csv("/Users/ndtltd/Documents/Projects/Assigment K P/world_population.csv", check.names = FALSE))`
+variables, with selected population years from 1970 to 2022, area, density,
+growth factor, and world-population share. The emissions file records annual
+CO2 metric tons per capita from 1990 to 2019; its duplicate 2019 column was
+removed. Country codes harmonized name variants before joining on canonical
+country names. Missing 2019 emissions were excluded without imputation.
+Population projection used \(N_{2030}=P\exp((g-1)8)\), where \(g\) is the
+dataset's multiplicative growth factor and \(P\) is 2022 population.
+Correlations use pairwise-complete observations; a log-population regression
+was used to examine the cross-country association.
+
+\section{Results}
+The population dataset has `r duplicate_pop` duplicate rows and
+`r missing_pop` missing values. By the 1.5-IQR rule, flagged observations
+occur in 2022 population (`r outlier_n[1]`), area (`r outlier_n[2]`), density
+(`r outlier_n[3]`), growth factor (`r outlier_n[4]`), and world share
+(`r outlier_n[5]`). Extreme population and area values are plausible country
+differences, so they were retained; missing CO2 values were excluded.
+
+The ten most populous countries in 2022 are
+`r paste(top10$country_name, collapse = ", ")`. Under a constant-rate
+assumption, their 2030 projections are illustrative rather than official
+forecasts. The population file provides only selected years (1990, 2000, 2010,
+2015, 2020, and 2022), whereas emissions provide annual observations through
+2019.
+
+```{r projection-table}
+knitr::kable(
+  data.frame(
+    Country = top10$country_name,
+    `2022 population` = top10$pop_2022,
+    `Projected 2030` = round(top10$projected_2030)
+  ),
+  format = "latex",
+  digits = 0,
+  col.names = c("Country", "2022 population", "Projected 2030"),
+  caption = "Exponential projections for the ten largest populations"
+)
+```
+
+Population correlations with area, density, growth rate, and world population
+share were computed numerically and visualized in the HTML analysis. The
+area/world-share correlation is `r sprintf("%.3f", cor_mat["area", "world_pct"])`;
+the density/world-share and growth-rate/world-share correlations are
+`r sprintf("%.3f", cor_mat["density", "world_pct"])` and
+`r sprintf("%.3f", cor_mat["growth_rate", "world_pct"])`, respectively. For the
+complete population/emissions join, Pearson correlation between population
+and 2019 per-capita emissions is `r sprintf("%.3f", unname(ct$estimate))`
+(\(p=\)`r format.pval(ct$p.value, digits = 2)`); the log-population regression
+has \(R^2=\)`r sprintf("%.3f", summary(model)$r.squared)`. These results do
+not support a meaningful linear relationship between population size and
+per-capita emissions in these data.
+
+The requested sum of country-level per-capita emissions is highest in
+`r continent_sum$continent[1]` (`r sprintf("%.2f", continent_sum$x[1])`),
+third in `r continent_sum$continent[3]`
+(`r sprintf("%.2f", continent_sum$x[3])`), and lowest in
+`r continent_sum$continent[nrow(continent_sum)]`
+(`r sprintf("%.2f", continent_sum$x[nrow(continent_sum)])`).
+This sum is not total emissions; it weights a small and a large country
+equally.
+
+```{r continent-plot}
+ggplot(continent_sum, aes(x = reorder(continent, x), y = x)) +
+  geom_col(fill = "#2878B5") +
+  coord_flip() +
+  labs(x = NULL, y = "Sum of country per-capita values",
+       title = "2019 CO2 indicator sums by continent") +
+  theme_minimal(base_size = 8)
+```
+
+\section{Discussion, lessons, and recommendations}
+
+The analysis demonstrates data inspection, missing-value handling, variable
+creation, visualization, and correlation/regression. Extreme population
+values are genuine differences, not automatically errors. More importantly,
+per-capita emissions and population totals measure different things. Future
+analysis should use total national emissions or population-weighted
+per-capita estimates for continent comparisons, annual population data for
+trend analysis, and forecasts that quantify uncertainty rather than assuming
+constant growth.
+
+\section{Conclusion}
+The 2030 projection provides a transparent scenario based on 2022 population
+and recent growth factors. Population size alone is not a useful proxy for
+per-capita CO2 emissions in this country-level comparison. Conclusions about
+total emissions require a total-emissions measure and should not be drawn by
+summing country per-capita values.
