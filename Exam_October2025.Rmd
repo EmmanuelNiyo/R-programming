@@ -1,0 +1,285 @@
+---
+title: "Exam_October2025"
+output: html_document
+---
+
+# ==============================================================
+# R for Data Science - Final Exam - Scenario I (Cholera outbreak)
+# Data: cholera.xlsx  (line list of cases)
+# Steps follow the 7 tasks in the exam, in order.
+# ==============================================================
+
+# ---- 0. Setup ------------------------------------------------
+# Run this ONCE if a package is missing:
+# install.packages(c("readxl", "dplyr", "ggplot2", "lubridate",
+#                    "janitor", "scales"))
+
+library(readxl)     # read Excel files
+library(dplyr)      # data manipulation
+library(ggplot2)    # graphs
+library(lubridate)  # dates
+library(janitor)    # clean column names
+library(scales)     # percent labels
+
+# Make a folder to save all figures and tables
+dir.create("outputs", showWarnings = FALSE)
+
+# ---- 1. Import the data --------------------------------------
+# Put cholera.xlsx in your working directory (or give the full path)
+cholera <- read_excel("cholera.xlsx")
+#cholera <- read_excel(file.choose()) // #cholera <- read_excel(file.choose())
+#cholera <- read_excel("/Users/ndtltd/Downloads/cholera.xlsx")
+
+cholera <- clean_names(cholera)   # turns names into lower_case_with_underscores
+
+names(cholera)    # LOOK at the real column names
+glimpse(cholera)  # structure and data types
+
+# >>> EDIT HERE: put your real column names on the RIGHT side <<<
+# (new_name = your_real_name). Delete a line if the name is already fine.
+cholera <- cholera %>%
+  rename(
+    sex        = sex,
+    age        = age,
+    province   = province,
+    district   = district,
+    date_onset = date_of_onset,
+    outcome    = outcome
+  )
+
+# ==============================================================
+# TASK 1: Identify and list data quality issues
+# ==============================================================
+cat("Number of rows:", nrow(cholera), "\n")
+cat("Duplicated rows:", sum(duplicated(cholera)), "\n")
+
+colSums(is.na(cholera))                 # missing values per column
+table(cholera$sex, useNA = "ifany")    # spelling variants (M, male, F...)
+table(cholera$outcome, useNA = "ifany")
+summary(as.numeric(cholera$age))        # impossible ages (negative, > 110)
+range(cholera$date_onset, na.rm = TRUE) # impossible dates
+
+# Count the impossible ages
+sum(as.numeric(cholera$age) < 0 | as.numeric(cholera$age) > 110, na.rm = TRUE)
+
+# Write the issues you find in your report, for example:
+#  - missing values in age / province / date_onset
+#  - duplicated records
+#  - sex written in different ways (M, Male, F, female...)
+#  - wrong data types (age stored as text, dates as text)
+#  - impossible values (negative age, onset date in the future)
+#  - inconsistent spelling of provinces / districts / outcome
+
+# ---- Basic cleaning (used for all tasks below) ----------------
+cholera <- cholera %>%
+  distinct() %>%                                   # remove duplicates
+  mutate(
+    age        = as.numeric(age),
+    age        = ifelse(age < 0 | age > 110, NA, age),  # impossible -> NA
+    date_onset = as.Date(date_onset),
+    province   = trimws(province),
+    district   = trimws(district)
+  )
+
+# ==============================================================
+# TASK 2: Harmonize the coding of the variable "Sex"
+# ==============================================================
+cholera <- cholera %>%
+  mutate(
+    sex = case_when(
+      tolower(trimws(sex)) %in% c("m", "male", "man", "masculin")  ~ "Male",
+      tolower(trimws(sex)) %in% c("f", "female", "woman", "feminin", "féminin") ~ "Female",
+      TRUE ~ NA_character_
+    )
+  )
+
+table(cholera$sex, useNA = "ifany")   # check: only Male / Female / NA
+
+# ==============================================================
+# TASK 3: Recode Age into AgeGroup
+# ==============================================================
+# right = FALSE means the left value is included: [5,15) = 5 to 14
+cholera <- cholera %>%
+  mutate(
+    age_group = cut(
+      age,
+      breaks = c(-Inf, 5, 15, 25, 50, Inf),
+      labels = c("Less than 5 years", "5-14 years", "15-24 years",
+                 "25-49 years", "50 years and above"),
+      right  = FALSE
+    )
+  )
+
+table(cholera$age_group, useNA = "ifany")
+
+# Recode the outcome into 1 = died, 0 = recovered
+# >>> check table(cholera$outcome) and edit the words if needed <<<
+cholera <- cholera %>%
+  mutate(
+    died = case_when(
+      tolower(trimws(outcome)) %in% c("died", "dead", "death", "deceased") ~ 1,
+      tolower(trimws(outcome)) %in% c("recovered", "alive", "discharged", "cured") ~ 0,
+      TRUE ~ NA_real_
+    )
+  )
+
+# ==============================================================
+# TASK 4: Statistical analyses for the Minister
+# ==============================================================
+
+# --- 4a. Total number of cases and geographic distribution ----
+total_cases <- nrow(cholera)
+cat("TOTAL CASES:", total_cases, "\n")
+
+cases_province <- cholera %>%
+  count(province, name = "cases") %>%
+  mutate(percent = round(cases / sum(cases) * 100, 1)) %>%
+  arrange(desc(cases))
+print(cases_province)
+
+cases_district <- cholera %>%
+  count(province, district, name = "cases") %>%
+  arrange(desc(cases))
+print(cases_district)
+
+# --- 4b. Deaths and Case Fatality Rate (CFR) by province ------
+# CFR (%) = deaths / cases * 100
+cfr_province <- cholera %>%
+  group_by(province) %>%
+  summarise(
+    cases   = n(),
+    deaths  = sum(died == 1, na.rm = TRUE),
+    cfr_pct = round(deaths / cases * 100, 1)
+  ) %>%
+  arrange(desc(cfr_pct))
+print(cfr_province)
+
+# --- 4c. Most and least affected age groups (children highlighted)
+age_tab <- cholera %>%
+  filter(!is.na(age_group)) %>%
+  count(age_group, name = "cases") %>%
+  mutate(
+    percent  = round(cases / sum(cases) * 100, 1),
+    children = age_group %in% c("Less than 5 years", "5-14 years")
+  )
+print(age_tab)
+
+fig_age <- ggplot(age_tab, aes(x = age_group, y = cases, fill = children)) +
+  geom_col() +
+  geom_text(aes(label = paste0(percent, "%")), vjust = -0.4) +
+  scale_fill_manual(values = c("grey60", "red3"),
+                    labels = c("Adults", "Children (under 15)"), name = "") +
+  labs(title = "Cholera cases by age group",
+       x = "Age group", y = "Number of cases") +
+  theme_minimal()
+print(fig_age)
+ggsave("outputs/fig_age_group.png", fig_age, width = 8, height = 5)
+
+# --- 4d. Gender distribution ----------------------------------
+sex_tab <- cholera %>%
+  filter(!is.na(sex)) %>%
+  count(sex, name = "cases") %>%
+  mutate(percent = round(cases / sum(cases) * 100, 1))
+print(sex_tab)
+
+fig_sex <- ggplot(sex_tab, aes(x = sex, y = cases, fill = sex)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(aes(label = paste0(percent, "%")), vjust = -0.4) +
+  labs(title = "Cholera cases by sex", x = "Sex", y = "Number of cases") +
+  theme_minimal()
+print(fig_sex)
+ggsave("outputs/fig_sex.png", fig_sex, width = 6, height = 5)
+
+# --- 4e. Are cases equal across age groups, genders, districts?
+# Chi-square goodness-of-fit test. H0: cases are equally distributed.
+# If p-value < 0.05 -> reject H0 (cases are NOT equally distributed).
+chisq.test(table(cholera$age_group))
+chisq.test(table(cholera$sex))
+chisq.test(table(cholera$district))
+
+# --- 4f. Epidemic curve (cases by date of onset) --------------
+epi <- cholera %>%
+  filter(!is.na(date_onset)) %>%
+  count(date_onset, name = "cases")
+
+fig_epi <- ggplot(epi, aes(x = date_onset, y = cases)) +
+  geom_col(fill = "steelblue") +
+  labs(title = "Epidemic curve of the cholera outbreak",
+       x = "Date of onset", y = "Number of new cases") +
+  theme_minimal()
+print(fig_epi)
+ggsave("outputs/fig_epidemic_curve.png", fig_epi, width = 9, height = 5)
+
+# --- 4g. Distribution by outcome and recovery rate ------------
+outcome_tab <- cholera %>%
+  count(outcome, name = "cases") %>%
+  mutate(percent = round(cases / sum(cases) * 100, 1))
+print(outcome_tab)
+
+recovery_rate <- round(mean(cholera$died == 0, na.rm = TRUE) * 100, 1)
+overall_cfr   <- round(mean(cholera$died == 1, na.rm = TRUE) * 100, 1)
+cat("Recovery rate:", recovery_rate, "%\n")
+cat("Overall CFR  :", overall_cfr, "%\n")
+
+# ==============================================================
+# TASK 5: Figures showing the outbreak situation
+# ==============================================================
+# Cases by province (map-like bar chart)
+fig_prov <- ggplot(cases_province, aes(x = reorder(province, cases), y = cases)) +
+  geom_col(fill = "darkorange") +
+  coord_flip() +
+  labs(title = "Cholera cases by province", x = "Province", y = "Cases") +
+  theme_minimal()
+print(fig_prov)
+ggsave("outputs/fig_province.png", fig_prov, width = 7, height = 4)
+
+# Case fatality rate by province
+fig_cfr <- ggplot(cfr_province, aes(x = reorder(province, cfr_pct), y = cfr_pct)) +
+  geom_col(fill = "firebrick") +
+  coord_flip() +
+  labs(title = "Case fatality rate by province", x = "Province", y = "CFR (%)") +
+  theme_minimal()
+print(fig_cfr)
+ggsave("outputs/fig_cfr.png", fig_cfr, width = 7, height = 4)
+
+# ==============================================================
+# TASK 6: Risk factors (estimates with confidence intervals)
+# ==============================================================
+# Logistic regression: which factors raise the risk of DEATH?
+risk_model <- glm(died ~ age_group + sex + province,
+                  data = cholera, family = binomial)
+summary(risk_model)
+
+# Odds ratios (OR) with 95% confidence intervals
+or_table <- exp(cbind(OR = coef(risk_model), confint.default(risk_model)))
+print(round(or_table, 2))
+write.csv(round(or_table, 2), "outputs/odds_ratios.csv")
+
+# How to read it:
+#  - OR > 1 : higher odds of dying than the reference group
+#  - OR < 1 : lower odds
+#  - If the 95% CI does NOT include 1 (or p < 0.05) -> significant risk factor
+
+# Simple tests of association with outcome
+chisq.test(table(cholera$age_group, cholera$died))
+chisq.test(table(cholera$sex, cholera$died))
+chisq.test(table(cholera$province, cholera$died))
+
+# ==============================================================
+# TASK 7: Recommendations (write them in your report)
+# ==============================================================
+# Base them on YOUR results. Typical points:
+#  1. Target the most affected provinces/districts: send teams, ORS
+#     (oral rehydration), treatment centres and medicines there first.
+#  2. Protect the most affected age groups (children): early care-seeking.
+#  3. Improve water, sanitation and hygiene (WASH): chlorination,
+#     safe water, latrines, handwashing, food safety.
+#  4. Reduce the case fatality rate: train staff, set up Cholera
+#     Treatment Centres/Units, keep stocks, community ORS points.
+#  5. Strengthen surveillance: faster reporting, fewer missing values,
+#     standard coding (sex, age, outcome), weekly epidemic curve.
+#  6. Consider oral cholera vaccination in hotspot districts and
+#     community awareness campaigns.
+
+# Save the cleaned data
+write.csv(cholera, "outputs/cholera_clean.csv", row.names = FALSE)
